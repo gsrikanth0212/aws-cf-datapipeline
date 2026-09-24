@@ -41,7 +41,9 @@ Resources:
   GitHubDeployRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ProjectName}-${Environment}-github-deploy"
+      # Deliberately NOT named "${ProjectName}-${Environment}-..." - the policy below lets this role
+      # manage roles with that prefix, and it must not be able to edit its own permissions.
+      RoleName: !Sub "github-deploy-${ProjectName}-${Environment}"
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -94,6 +96,8 @@ Resources:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                   - iam:UpdateAssumeRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
                   - iam:PassRole
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-*"
               - Sid: PipelineServices
