@@ -1,0 +1,30 @@
+# Environment config for PROD.
+# See the note in stage.yaml about sharing one account/bucket between environments.
+environment: prod
+aws_region: us-east-1
+stack_name: demo-datapipeline-prod
+
+parameters:
+  ProjectName: "demo-datapipeline"
+  Environment: "prod"
+  RawBucketName: "demo-learn-cloudform"
+  RawPrefix: "raw-prod/"
+  ArtifactBucketName: "demo-learn-cloudform"
+  ArtifactPrefix: "artifacts/prod"
+  GlueDatabaseName: "demo_datapipeline_prod"
+  GlueVersion: "4.0"
+  GlueWorkerType: "G.2X"
+  GlueNumberOfWorkers: "10"
+  GlueTimeoutMinutes: "120"
+  LambdaMemorySize: "256"
+  AllowedExtensions: ".csv"
+  MaxFileSizeMB: "2048"
+  LogRetentionDays: "90"
+  EnableS3Trigger: "true"
+  ExistingCuratedBucketName: ""  # "" = create a dedicated curated bucket for this environment
+
+tags:
+  Project: "demo-datapipeline"
+  Environment: "prod"
+  Owner: "data-engineering"
+  CostCenter: "analytics"

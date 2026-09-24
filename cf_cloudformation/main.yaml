@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Root (parent) stack for the demo data pipeline.
+  It wires together the nested stacks: S3 -> IAM -> Glue -> Lambda -> Step Functions.
+  Deploy it with scripts/deploy.sh (which runs `aws cloudformation package` first,
+  so the local TemplateURL paths below are uploaded to S3 automatically).
+  To deploy from the AWS console instead, see docs/CONSOLE_DEPLOYMENT.md.
+
+# ---------------------------------------------------------------------------
+# Parameters: every value that changes between dev / stage / prod lives here.
+# The actual values come from configs/<env>.yaml.
+# ---------------------------------------------------------------------------
+Parameters:
+  ProjectName:
+    Type: String
+    Default: demo-datapipeline
+    AllowedPattern: "^[a-z0-9-]+$"
+  Environment:
+    Type: String
+    AllowedValues: [dev, stage, prod]
+  RawBucketName:
+    Type: String
+    Description: Existing bucket where source files land (e.g. demo-learn-cloudform)
+  RawPrefix:
+    Type: String
+    Default: raw/
+  ArtifactBucketName:
+    Type: String
+    Description: Existing bucket that holds Glue scripts, job configs and catalog schemas
+  ArtifactPrefix:
+    Type: String
+    Description: Folder inside the artifact bucket for this environment (e.g. artifacts/dev)
+  GlueDatabaseName:
+    Type: String
+    AllowedPattern: "^[a-z0-9_]+$"
+  GlueVersion:
+    Type: String
+    Default: "4.0"
+  GlueWorkerType:
+    Type: String
+    Default: G.1X
+    AllowedValues: [G.1X, G.2X, G.4X]
+  GlueNumberOfWorkers:
+    Type: Number
+    Default: 2
+  GlueTimeoutMinutes:
+    Type: Number
+    Default: 30
+  LambdaMemorySize:
+    Type: Number
+    Default: 128
+  LambdaCodeS3Key:
+    Type: String
+    Description: Key of the Lambda zip inside ArtifactBucketName (set by scripts/deploy.sh)
+  AllowedDatasets:
+    Type: String
+    Description: Comma separated dataset names (generated from manifest.yaml)
+  AllowedExtensions:
+    Type: String
+    Default: ".csv"
+  MaxFileSizeMB:
+    Type: Number
+    Default: 100
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+  EnableS3Trigger:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+  ExistingCuratedBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Leave empty to create a dedicated curated bucket (s3.yaml). Or give an existing bucket
+      (e.g. the raw bucket) and the output is written to its curated/ folder instead.
+
+Conditions:
+  CreateCuratedBucket: !Equals [!Ref ExistingCuratedBucketName, ""]
+
+Resources:
+  # 1. Storage: curated (output) bucket - only when no existing bucket is given
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateCuratedBucket
+    Properties:
+      TemplateURL: ./s3.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # 2. Security: one IAM role per service (least privilege)
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./iam.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        RawBucketName: !Ref RawBucketName
+        RawPrefix: !Ref RawPrefix
+        ArtifactBucketName: !Ref ArtifactBucketName
+        ArtifactPrefix: !Ref ArtifactPrefix
+        CuratedBucketName: !If [CreateCuratedBucket, !GetAtt S3Stack.Outputs.CuratedBucketName, !Ref ExistingCuratedBucketName]
+
+  # 3. Processing: Glue database, ETL job and crawler
+  GlueStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./glue.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        GlueRoleArn: !GetAtt IAMStack.Outputs.GlueRoleArn
+        ArtifactBucketName: !Ref ArtifactBucketName
+        ArtifactPrefix: !Ref ArtifactPrefix
+        CuratedBucketName: !If [CreateCuratedBucket, !GetAtt S3Stack.Outputs.CuratedBucketName, !Ref ExistingCuratedBucketName]
+        GlueDatabaseName: !Ref GlueDatabaseName
+        GlueVersion: !Ref GlueVersion
+        GlueWorkerType: !Ref GlueWorkerType
+        GlueNumberOfWorkers: !Ref GlueNumberOfWorkers
+        GlueTimeoutMinutes: !Ref GlueTimeoutMinutes
+
+  # 4. Validation: Lambda that checks each incoming file
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./lambda.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        LambdaRoleArn: !GetAtt IAMStack.Outputs.LambdaRoleArn
+        LambdaMemorySize: !Ref LambdaMemorySize
+        LambdaCodeS3Bucket: !Ref ArtifactBucketName
+        LambdaCodeS3Key: !Ref LambdaCodeS3Key
+        RawPrefix: !Ref RawPrefix
+        AllowedDatasets: !Ref AllowedDatasets
+        AllowedExtensions: !Ref AllowedExtensions
+        MaxFileSizeMB: !Ref MaxFileSizeMB
+        LogRetentionDays: !Ref LogRetentionDays
+
+  # 5. Orchestration: Step Functions + EventBridge trigger on s3://<raw bucket>/<raw prefix>
+  StepFunctionsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./stepfunctions.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        StepFunctionsRoleArn: !GetAtt IAMStack.Outputs.StepFunctionsRoleArn
+        EventBridgeRoleArn: !GetAtt IAMStack.Outputs.EventBridgeRoleArn
+        ValidateFunctionArn: !GetAtt LambdaStack.Outputs.ValidateFunctionArn
+        GlueJobName: !GetAtt GlueStack.Outputs.GlueJobName
+        CrawlerName: !GetAtt GlueStack.Outputs.CrawlerName
+        RawBucketName: !Ref RawBucketName
+        RawPrefix: !Ref RawPrefix
+        LogRetentionDays: !Ref LogRetentionDays
+        EnableS3Trigger: !Ref EnableS3Trigger
+
+Outputs:
+  CuratedBucketName:
+    Value: !If [CreateCuratedBucket, !GetAtt S3Stack.Outputs.CuratedBucketName, !Ref ExistingCuratedBucketName]
+  GlueJobName:
+    Value: !GetAtt GlueStack.Outputs.GlueJobName
+  GlueDatabaseName:
+    Value: !Ref GlueDatabaseName
+  ValidateFunctionName:
+    Value: !GetAtt LambdaStack.Outputs.ValidateFunctionName
+  StateMachineArn:
+    Value: !GetAtt StepFunctionsStack.Outputs.StateMachineArn

@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Orchestration. A file landing in s3://<RawBucket>/<RawPrefix> fires an EventBridge rule
+  which starts this state machine:
+    ValidateFile (Lambda) -> IsFileValid? -> RunGlueJob (.sync, waits) -> StartCrawler -> Success
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  StepFunctionsRoleArn:
+    Type: String
+  EventBridgeRoleArn:
+    Type: String
+  ValidateFunctionArn:
+    Type: String
+  GlueJobName:
+    Type: String
+  CrawlerName:
+    Type: String
+  RawBucketName:
+    Type: String
+  RawPrefix:
+    Type: String
+  LogRetentionDays:
+    Type: Number
+  EnableS3Trigger:
+    Type: String
+
+Conditions:
+  CreateTrigger: !Equals [!Ref EnableS3Trigger, "true"]
+
+Resources:
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${ProjectName}-${Environment}-pipeline"
+      RetentionInDays: !Ref LogRetentionDays
+
+  PipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${ProjectName}-${Environment}-pipeline"
+      StateMachineType: STANDARD
+      RoleArn: !Ref StepFunctionsRoleArn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+      # ${...} placeholders in the definition are filled from DefinitionSubstitutions
+      DefinitionSubstitutions:
+        ValidateFunctionArn: !Ref ValidateFunctionArn
+        GlueJobName: !Ref GlueJobName
+        CrawlerName: !Ref CrawlerName
+      Definition:
+        Comment: Raw -> Curated data pipeline
+        StartAt: ValidateFile
+        States:
+          ValidateFile:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: ${ValidateFunctionArn}
+              Payload:
+                bucket.$: $.detail.bucket.name
+                key.$: $.detail.object.key
+                size.$: $.detail.object.size
+            ResultSelector:
+              is_valid.$: $.Payload.is_valid
+              dataset.$: $.Payload.dataset
+              s3_path.$: $.Payload.s3_path
+              reason.$: $.Payload.reason
+            ResultPath: $.validation
+            Retry:
+              - ErrorEquals: [Lambda.ServiceException, Lambda.TooManyRequestsException, Lambda.SdkClientException]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Next: IsFileValid
+
+          IsFileValid:
+            Type: Choice
+            Choices:
+              - Variable: $.validation.is_valid
+                BooleanEquals: true
+                Next: RunGlueJob
+            Default: FileRejected
+
+          RunGlueJob:
+            Type: Task
+            Resource: arn:aws:states:::glue:startJobRun.sync   # .sync = wait until the job finishes
+            Parameters:
+              JobName: ${GlueJobName}
+              Arguments:
+                --dataset.$: $.validation.dataset
+                --input_path.$: $.validation.s3_path
+            ResultSelector:
+              job_run_id.$: $.Id
+              state.$: $.JobRunState
+              execution_time.$: $.ExecutionTime
+            ResultPath: $.glue
+            Retry:
+              - ErrorEquals: [Glue.ConcurrentRunsExceededException]
+                IntervalSeconds: 60
+                MaxAttempts: 5
+                BackoffRate: 1.5
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.error
+                Next: PipelineFailed
+            Next: StartCrawler
+
+          StartCrawler:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:glue:startCrawler
+            Parameters:
+              Name: ${CrawlerName}
+            # Keep the (empty) crawler response under $.crawler so the rest of the input is preserved.
+            # (Step Functions allows `ResultPath: null` to discard it, but CloudFormation rejects null values.)
+            ResultPath: $.crawler
+            Catch:
+              # Crawler already running because another file just finished - that's fine.
+              - ErrorEquals: [Glue.CrawlerRunningException]
+                ResultPath: $.crawler_error
+                Next: PipelineSucceeded
+            Next: PipelineSucceeded
+
+          FileRejected:
+            Type: Fail
+            Error: FileValidationFailed
+            CausePath: $.validation.reason
+
+          PipelineFailed:
+            Type: Fail
+            Error: GlueJobFailed
+            CausePath: $.error.Cause
+
+          PipelineSucceeded:
+            Type: Succeed
+
+  # Fires when an object is created under s3://<RawBucket>/<RawPrefix>.
+  # Requires EventBridge notifications to be enabled on the raw bucket (one-time, see README).
+  RawFileArrivedRule:
+    Type: AWS::Events::Rule
+    Condition: CreateTrigger
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-raw-file-arrived"
+      Description: !Sub "Start the pipeline when a file lands in s3://${RawBucketName}/${RawPrefix}"
+      State: ENABLED
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Ref RawBucketName]
+          object:
+            key: [{ prefix: !Ref RawPrefix }]
+      Targets:
+        - Id: PipelineStateMachine
+          Arn: !Ref PipelineStateMachine
+          RoleArn: !Ref EventBridgeRoleArn
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref PipelineStateMachine

@@ -1,0 +1,35 @@
+# Job config = HOW the Glue job processes this dataset.
+# Read at runtime by glue_jobs/raw_to_curated.py (uploaded to s3://<artifact bucket>/<prefix>/job_configs/).
+# Changing a rule here only needs a redeploy of the file - no code change.
+dataset: customers
+description: Customer master data exported daily from the CRM
+owner: data-engineering@example.com
+
+source:
+  format: csv
+  header: true
+  delimiter: ","
+  encoding: UTF-8
+
+transformations:
+  trim_strings: true
+  empty_string_as_null: true        # "" -> NULL (e.g. blank segment)
+  lowercase: [email]                # JESSE@EXAMPLE.ORG -> jesse@example.org
+  uppercase: [segment, source_system]  # Online/ONLINE -> ONLINE, pos/POS -> POS
+  initcap: [first_name, last_name]  # JOHNNY / justin -> Johnny / Justin
+  deduplicate_on: [customer_id]
+
+data_quality:
+  max_reject_percentage: 5      # fail the job if more than 5% of rows are rejected
+
+target:
+  format: parquet
+  write_mode: append
+  partition_by: [load_date]
+  compression: snappy
+
+# Values here are merged on top of the settings above for that environment only.
+environment_overrides:
+  dev:
+    data_quality:
+      max_reject_percentage: 50  # dev test files are messy - be lenient

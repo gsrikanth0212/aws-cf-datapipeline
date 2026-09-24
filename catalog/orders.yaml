@@ -1,0 +1,26 @@
+# Catalog (schema contract) = WHAT the orders data looks like.
+table: orders
+description: One row per order
+layer: curated
+owner: data-engineering@example.com
+contains_pii: false
+
+columns:
+  - name: order_id
+    type: string
+    nullable: false
+    description: Unique order identifier (primary key)
+  - name: customer_id
+    type: int
+    nullable: false
+    description: Foreign key to customers.customer_id
+  - name: order_ts
+    type: timestamp
+    format: yyyy-MM-dd HH:mm:ss
+  - name: status
+    type: string
+    description: PLACED | SHIPPED | DELIVERED | CANCELLED
+  - name: amount
+    type: decimal(10,2)
+  - name: currency
+    type: string

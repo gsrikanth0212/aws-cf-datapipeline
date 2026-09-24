@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ONE-TIME bootstrap (deploy manually, once per environment). Creates the IAM role that
+  GitHub Actions assumes through OIDC - no long-lived AWS access keys stored in GitHub.
+  Only the GitHub environment named <Environment> in <GitHubOrg>/<GitHubRepo> can assume it.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: GitHub user or organisation name
+  GitHubRepo:
+    Type: String
+    Default: aws-cf-datapipeline
+  Environment:
+    Type: String
+    AllowedValues: [dev, stage, prod]
+  ProjectName:
+    Type: String
+    Default: demo-datapipeline
+  ArtifactBucketName:
+    Type: String
+    Default: demo-learn-cloudform
+  CreateOIDCProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Only one GitHub OIDC provider can exist per account. Use "false" for the 2nd/3rd environment in the same account.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-github-deploy"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}/${GitHubRepo}:environment:${Environment}"
+      Policies:
+        - PolicyName: deploy-pipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudFormation
+                Effect: Allow
+                Action: ["cloudformation:*"]
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${Environment}*"
+              - Sid: CloudFormationGlobal
+                Effect: Allow
+                Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary]
+                Resource: "*"
+              - Sid: ArtifactBucket
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetBucketLocation]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}/artifacts/${Environment}/*"
+              - Sid: CuratedBucket
+                Effect: Allow
+                Action: ["s3:*"]
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Environment}-curated-*"
+              - Sid: IamRolesForThePipeline
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${Environment}-*"
+              - Sid: PipelineServices
+                Effect: Allow
+                Action: ["glue:*", "lambda:*", "states:*", "events:*", "logs:*"]
+                Resource: "*"
+              - Sid: WhoAmI
+                Effect: Allow
+                Action: [sts:GetCallerIdentity]
+                Resource: "*"
+
+Outputs:
+  DeployRoleArn:
+    Description: Put this in GitHub -> Settings -> Environments -> <env> -> secret AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubDeployRole.Arn

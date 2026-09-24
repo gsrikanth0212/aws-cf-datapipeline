@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  S3 storage for the pipeline. The RAW bucket (demo-learn-cloudform) already exists and is
+  NOT managed here - this stack only creates the CURATED bucket that Glue writes into.
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+
+Resources:
+  CuratedBucket:
+    Type: AWS::S3::Bucket
+    # Retain = deleting the stack will NOT delete your data. Empty/delete the bucket manually if needed.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # Bucket names are global, so the account id is appended to keep them unique.
+      BucketName: !Sub "${ProjectName}-${Environment}-curated-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupGlueTemp
+            Status: Enabled
+            Prefix: glue-temp/
+            ExpirationInDays: 3
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: DataLayer
+          Value: curated
+
+  # Deny any request that is not over HTTPS
+  CuratedBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CuratedBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt CuratedBucket.Arn
+              - !Sub "${CuratedBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  CuratedBucketName:
+    Value: !Ref CuratedBucket
+  CuratedBucketArn:
+    Value: !GetAtt CuratedBucket.Arn

@@ -1,0 +1,32 @@
+# Environment config for STAGE (pre-production: prod-like sizing, test data).
+# In real projects stage usually lives in its own AWS account with its own raw bucket.
+# If dev and stage share ONE account and ONE raw bucket, a file in raw/ would trigger both
+# pipelines - so here stage listens on a different prefix.
+environment: stage
+aws_region: us-east-1
+stack_name: demo-datapipeline-stage
+
+parameters:
+  ProjectName: "demo-datapipeline"
+  Environment: "stage"
+  RawBucketName: "demo-learn-cloudform"
+  RawPrefix: "raw-stage/"
+  ArtifactBucketName: "demo-learn-cloudform"
+  ArtifactPrefix: "artifacts/stage"
+  GlueDatabaseName: "demo_datapipeline_stage"
+  GlueVersion: "4.0"
+  GlueWorkerType: "G.1X"
+  GlueNumberOfWorkers: "5"
+  GlueTimeoutMinutes: "60"
+  LambdaMemorySize: "256"
+  AllowedExtensions: ".csv"
+  MaxFileSizeMB: "500"
+  LogRetentionDays: "30"
+  EnableS3Trigger: "true"
+  ExistingCuratedBucketName: ""  # "" = create a dedicated curated bucket for this environment
+
+tags:
+  Project: "demo-datapipeline"
+  Environment: "stage"
+  Owner: "data-engineering"
+  CostCenter: "learning"

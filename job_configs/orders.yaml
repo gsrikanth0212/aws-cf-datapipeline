@@ -1,0 +1,28 @@
+# Job config = HOW the Glue job processes this dataset.
+dataset: orders
+description: Order transactions from the e-commerce platform
+owner: data-engineering@example.com
+
+source:
+  format: csv
+  header: true
+  delimiter: ","
+  encoding: UTF-8
+
+transformations:
+  trim_strings: true
+  deduplicate_on: [order_id]
+
+data_quality:
+  max_reject_percentage: 1
+
+target:
+  format: parquet
+  write_mode: append
+  partition_by: [load_date]
+  compression: snappy
+
+environment_overrides:
+  dev:
+    data_quality:
+      max_reject_percentage: 50

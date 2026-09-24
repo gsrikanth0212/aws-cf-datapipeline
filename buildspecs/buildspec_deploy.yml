@@ -1,0 +1,25 @@
+# AWS CodeBuild build spec - DEPLOY stage.
+# Create one CodeBuild project per environment (or one project, and set DEPLOY_ENV
+# as an environment variable in each CodePipeline stage). The CodeBuild service role
+# needs the same permissions as the GitHub deploy role in cf_cloudformation/bootstrap/github_oidc.yaml.
+version: 0.2
+
+env:
+  variables:
+    DEPLOY_ENV: dev   # overridden per stage: dev | stage | prod
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+      - chmod +x /usr/local/bin/yq
+  build:
+    commands:
+      - chmod +x scripts/*.sh
+      - ./scripts/deploy.sh "$DEPLOY_ENV"
+
+artifacts:
+  files:
+    - build/packaged-*.yaml

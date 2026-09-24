@@ -1,0 +1,30 @@
+# Deployment manifest = the "packing list" of this project.
+# scripts/deploy.sh and scripts/validate.sh read it, so adding a new dataset or a new
+# folder of artifacts is a change here, not a change to the scripts or the pipeline.
+project: demo-datapipeline
+version: 1.0.0
+
+# Root CloudFormation template (nested stacks are found from it).
+template: cf_cloudformation/main.yaml
+
+# Folders uploaded to s3://<ArtifactBucketName>/<ArtifactPrefix>/<dest> on every deploy.
+artifacts:
+  - source: glue_jobs
+    dest: glue_jobs
+  - source: job_configs
+    dest: job_configs
+  - source: catalog
+    dest: catalog
+
+# Datasets the pipeline accepts. Each one needs a job config and a catalog schema.
+# The names are passed to the Lambda as ALLOWED_DATASETS, so a file in
+# raw/<unknown dataset>/ is rejected before any Glue cost is incurred.
+datasets:
+  - name: customers
+    job_config: job_configs/customers.yaml
+    schema: catalog/customers.yaml
+  - name: orders
+    job_config: job_configs/orders.yaml
+    schema: catalog/orders.yaml
+
+environments: [dev, stage, prod]

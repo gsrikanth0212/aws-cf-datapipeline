@@ -1,0 +1,58 @@
+# Catalog (schema contract) = WHAT the customers data looks like.
+# The Glue job enforces it (missing columns fail the run, types are cast, non-nullable
+# columns are checked). The crawler then registers the curated table in the Glue Data Catalog.
+# Columns in the file but not listed here (e.g. the source's own load_date) are dropped;
+# the job adds its own load_date partition column.
+table: customers
+description: One row per customer
+layer: curated
+owner: data-engineering@example.com
+contains_pii: true
+
+columns:
+  - name: customer_id
+    type: int
+    nullable: false
+    description: Unique customer identifier (primary key)
+  - name: first_name
+    type: string
+    pii: true
+  - name: last_name
+    type: string
+    pii: true
+  - name: email
+    type: string
+    nullable: false
+    pii: true
+  - name: phone
+    type: string
+    pii: true
+    description: Free-text phone number as captured by the source system
+  - name: country
+    type: string
+  - name: city
+    type: string
+  - name: address
+    type: string
+    pii: true
+  - name: signup_date
+    type: date
+    # Source systems send different formats. They are tried in this order; the first that parses wins.
+    # Ambiguous values like 05/12/2026 are read day-first (dd/MM) because day-first is listed first.
+    formats:
+      - "yyyy-MM-dd"
+      - "yyyy-MM-dd'T'HH:mm:ss"
+      - "dd-MM-yyyy"
+      - "dd/MM/yyyy"
+      - "dd/MM/yyyy HH:mm"
+      - "MM/dd/yyyy"
+      - "MM/dd/yyyy HH:mm"
+  - name: segment
+    type: string
+    description: ONLINE | RETAIL | WHOLESALE | VIP
+  - name: source_system
+    type: string
+    description: System the record came from (POS, CRM, CRM_V2, WEBAPP)
+  - name: _row_hash
+    type: string
+    description: Hash of the source row, useful for change detection

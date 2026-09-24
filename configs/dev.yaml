@@ -1,0 +1,33 @@
+# Environment config for DEV.
+# Everything that differs between environments lives in these files; the templates stay identical.
+# Keep every value under `parameters` and `tags` quoted (they are passed to CloudFormation as strings).
+environment: dev
+aws_region: us-east-1
+stack_name: demo-datapipeline-dev
+
+# Passed to cf_cloudformation/main.yaml as --parameter-overrides
+parameters:
+  ProjectName: "demo-datapipeline"
+  Environment: "dev"
+  RawBucketName: "demo-learn-cloudform"
+  RawPrefix: "raw/"
+  ArtifactBucketName: "demo-learn-cloudform"
+  ArtifactPrefix: "artifacts/dev"
+  GlueDatabaseName: "demo_datapipeline_dev"
+  GlueVersion: "4.0"
+  GlueWorkerType: "G.1X"
+  GlueNumberOfWorkers: "2"        # smallest allowed - cheap
+  GlueTimeoutMinutes: "30"
+  LambdaMemorySize: "128"
+  AllowedExtensions: ".csv"
+  MaxFileSizeMB: "100"
+  LogRetentionDays: "7"
+  EnableS3Trigger: "true"
+  ExistingCuratedBucketName: "demo-learn-cloudform"  # write output to s3://demo-learn-cloudform/curated/ ("" = create a dedicated bucket)
+
+# Applied to every resource in every nested stack (cost tracking, ownership)
+tags:
+  Project: "demo-datapipeline"
+  Environment: "dev"
+  Owner: "data-engineering"
+  CostCenter: "learning"

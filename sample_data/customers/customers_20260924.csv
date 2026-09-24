@@ -1,0 +1,6 @@
+customer_id,first_name,last_name,email,phone,country,city,address,signup_date,segment,source_system,load_date,_row_hash
+1,Asha,Reddy,asha.reddy@example.com,(040)555-0101,India,Hyderabad,12 Banjara Hills,2024-01-15,Retail,POS,2026-09-24,a1b2c3d4
+2,JOHN,smith,JOHN.SMITH@EXAMPLE.COM,555-0102,United States,Austin,400 Congress Ave,03/02/2024,ONLINE,crm_v2,2026-09-24,b2c3d4e5
+3,Maria,Garcia,maria.garcia@example.com,,Spain,Madrid,Calle Mayor 5,19-07-2025,,WebApp,2026-09-24,c3d4e5f6
+4,Liam,Brown,,555-0104,United Kingdom,Leeds,8 Park Row,2026-02-10T00:00:00,VIP,pos,2026-09-24,d4e5f6a7
+3,Maria,Garcia,maria.garcia@example.com,,Spain,Madrid,Calle Mayor 5,19-07-2025,,WebApp,2026-09-24,c3d4e5f6

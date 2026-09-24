@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Glue resources: Data Catalog database, a generic (config-driven) ETL job and a crawler
+  that registers the curated Parquet data as tables (queryable from Athena).
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  GlueRoleArn:
+    Type: String
+  ArtifactBucketName:
+    Type: String
+  ArtifactPrefix:
+    Type: String
+  CuratedBucketName:
+    Type: String
+  GlueDatabaseName:
+    Type: String
+  GlueVersion:
+    Type: String
+  GlueWorkerType:
+    Type: String
+  GlueNumberOfWorkers:
+    Type: Number
+  GlueTimeoutMinutes:
+    Type: Number
+
+Resources:
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: !Sub "Curated tables for ${ProjectName} (${Environment})"
+
+  # One generic job. Which dataset it processes is decided at runtime by --dataset,
+  # which loads job_configs/<dataset>.yaml and catalog/<dataset>.yaml from S3.
+  RawToCuratedJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-raw-to-curated"
+      Role: !Ref GlueRoleArn
+      GlueVersion: !Ref GlueVersion
+      WorkerType: !Ref GlueWorkerType
+      NumberOfWorkers: !Ref GlueNumberOfWorkers
+      Timeout: !Ref GlueTimeoutMinutes
+      MaxRetries: 0            # retries are handled by Step Functions
+      ExecutionProperty:
+        MaxConcurrentRuns: 5   # several files can be processed in parallel
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub "s3://${ArtifactBucketName}/${ArtifactPrefix}/glue_jobs/raw_to_curated.py"
+      DefaultArguments:
+        "--job-language": python
+        "--enable-metrics": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--job-bookmark-option": job-bookmark-disable
+        "--TempDir": !Sub "s3://${CuratedBucketName}/glue-temp/"
+        # Custom arguments read by glue_jobs/raw_to_curated.py
+        "--env": !Ref Environment
+        "--config_s3_prefix": !Sub "s3://${ArtifactBucketName}/${ArtifactPrefix}"
+        "--curated_bucket": !Ref CuratedBucketName
+        "--dataset": "customers"          # overridden by Step Functions at runtime
+        "--input_path": "none"             # overridden by Step Functions at runtime
+
+  CuratedCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-curated-crawler"
+      Role: !Ref GlueRoleArn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${CuratedBucketName}/curated/"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      # TableLevelConfiguration = which folder level becomes a table (counting the bucket as 1):
+      #   s3://bucket(1)/curated(2)/customers(3)/load_date=.../  -> tables "customers", "orders"
+      # Without it, a single dataset folder is mistaken for a partition of one table named "curated".
+      Configuration: '{"Version":1.0,"Grouping":{"TableLevelConfiguration":3}}'
+
+Outputs:
+  GlueJobName:
+    Value: !Ref RawToCuratedJob
+  CrawlerName:
+    Value: !Ref CuratedCrawler
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase

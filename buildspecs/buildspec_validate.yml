@@ -1,0 +1,23 @@
+# AWS CodeBuild build spec - VALIDATE stage.
+# Used when the pipeline runs on AWS CodePipeline/CodeBuild instead of (or in addition to)
+# GitHub Actions. It calls the SAME script as GitHub Actions, so both CI systems behave identically.
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install -r requirements-dev.txt
+      - wget -q https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+      - chmod +x /usr/local/bin/yq
+  build:
+    commands:
+      - chmod +x scripts/*.sh
+      - ./scripts/validate.sh
+
+reports:
+  unit-tests:
+    files: ["**/*"]
+    base-directory: build/test-reports
+    file-format: JUNITXML

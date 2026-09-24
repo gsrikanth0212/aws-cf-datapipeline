@@ -1,0 +1,6 @@
+# Local + CI tooling (not deployed)
+cfn-lint>=1.0
+yamllint>=1.35
+pytest>=8.0
+boto3>=1.34
+PyYAML>=6.0

@@ -1,0 +1,78 @@
+# CI/CD for the data pipeline.
+#   Pull request to main  -> validate only (nothing is deployed)
+#   Push/merge to main    -> validate -> dev -> stage -> prod (prod waits for manual approval)
+#   Manual run            -> validate -> the one environment you choose
+#
+# Deploy jobs only run when the repository variable DEPLOY_ENABLED is "true"
+# (Settings -> Secrets and variables -> Actions -> Variables). Until then only validation runs.
+name: Deploy Data Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, stage, prod]
+        default: dev
+
+permissions:
+  id-token: write   # needed to get the OIDC token for AWS
+  contents: read
+
+# Never run two deployments of the same branch at the same time
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: pip install -r requirements-dev.txt
+
+      - name: Run validations
+        run: ./scripts/validate.sh   # yq is preinstalled on GitHub's ubuntu runners
+
+  deploy-dev:
+    name: Dev
+    needs: validate
+    if: vars.DEPLOY_ENABLED == 'true' && (github.event_name == 'push' || inputs.environment == 'dev')
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: dev
+    secrets: inherit
+
+  deploy-stage:
+    name: Stage
+    needs: [validate, deploy-dev]
+    if: >-
+      always() && vars.DEPLOY_ENABLED == 'true' && needs.validate.result == 'success' &&
+      ((github.event_name == 'push' && needs.deploy-dev.result == 'success') || inputs.environment == 'stage')
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: stage
+    secrets: inherit
+
+  deploy-prod:
+    name: Prod
+    needs: [validate, deploy-stage]
+    if: >-
+      always() && vars.DEPLOY_ENABLED == 'true' && needs.validate.result == 'success' &&
+      ((github.event_name == 'push' && needs.deploy-stage.result == 'success') || inputs.environment == 'prod')
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: prod
+    secrets: inherit

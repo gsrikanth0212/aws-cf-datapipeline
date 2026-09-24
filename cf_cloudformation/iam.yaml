@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  IAM roles for Glue, Lambda, Step Functions and EventBridge.
+  Resource ARNs are built from the naming convention "<ProjectName>-<Environment>-*"
+  so this stack does not depend on the other stacks (avoids circular dependencies).
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  RawBucketName:
+    Type: String
+  RawPrefix:
+    Type: String
+  ArtifactBucketName:
+    Type: String
+  ArtifactPrefix:
+    Type: String
+  CuratedBucketName:
+    Type: String
+
+Resources:
+  # ---------------------------------------------------------------- Glue
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-glue-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: glue.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: glue-s3-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadRawData
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "arn:aws:s3:::${RawBucketName}/${RawPrefix}*"
+              - Sid: ReadArtifacts
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "arn:aws:s3:::${ArtifactBucketName}/${ArtifactPrefix}/*"
+              - Sid: ListSourceBuckets
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource:
+                  - !Sub "arn:aws:s3:::${RawBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+              # Write access only to the curated/ and glue-temp/ folders, so the job can never
+              # overwrite or delete raw files even when raw and curated share one bucket.
+              # (No slash after "curated": Spark also writes marker objects like curated_$folder$.)
+              - Sid: ListCuratedBucket
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Sub "arn:aws:s3:::${CuratedBucketName}"
+              - Sid: ReadWriteCurated
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource:
+                  - !Sub "arn:aws:s3:::${CuratedBucketName}/curated*"
+                  - !Sub "arn:aws:s3:::${CuratedBucketName}/glue-temp*"
+
+  # ---------------------------------------------------------------- Lambda
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: lambda-read-raw
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject]   # also allows HeadObject
+                Resource: !Sub "arn:aws:s3:::${RawBucketName}/${RawPrefix}*"
+
+  # ---------------------------------------------------------------- Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-sfn-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sfn-orchestration
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeLambda
+                Effect: Allow
+                Action: [lambda:InvokeFunction]
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-*"
+              - Sid: RunGlueJob
+                Effect: Allow
+                Action: [glue:StartJobRun, glue:GetJobRun, glue:GetJobRuns, glue:BatchStopJobRun]
+                Resource: !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${ProjectName}-${Environment}-*"
+              - Sid: StartCrawler
+                Effect: Allow
+                Action: [glue:StartCrawler]
+                Resource: !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:crawler/${ProjectName}-${Environment}-*"
+              - Sid: CloudWatchLogsDelivery   # required for state machine logging
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
+  # ---------------------------------------------------------------- EventBridge
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-events-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-state-machine
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [states:StartExecution]
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectName}-${Environment}-*"
+
+Outputs:
+  GlueRoleArn:
+    Value: !GetAtt GlueJobRole.Arn
+  LambdaRoleArn:
+    Value: !GetAtt LambdaRole.Arn
+  StepFunctionsRoleArn:
+    Value: !GetAtt StepFunctionsRole.Arn
+  EventBridgeRoleArn:
+    Value: !GetAtt EventBridgeRole.Arn

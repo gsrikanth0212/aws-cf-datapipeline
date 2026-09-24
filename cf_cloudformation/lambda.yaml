@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lambda that validates a newly arrived raw file (dataset, extension, size) before
+  Step Functions spends money on a Glue job.
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  LambdaRoleArn:
+    Type: String
+  LambdaMemorySize:
+    Type: Number
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: Bucket holding the Lambda zip
+  LambdaCodeS3Key:
+    Type: String
+    Description: Key of the Lambda zip, e.g. artifacts/dev/lambda/validate_file-<hash>.zip
+  RawPrefix:
+    Type: String
+  AllowedDatasets:
+    Type: String
+  AllowedExtensions:
+    Type: String
+  MaxFileSizeMB:
+    Type: Number
+  LogRetentionDays:
+    Type: Number
+
+Resources:
+  # Create the log group ourselves so we control retention (default is "never expire").
+  ValidateFileLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-validate-file"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ValidateFileFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ValidateFileLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-validate-file"
+      Description: Validates raw files before the Glue job runs
+      Runtime: python3.12
+      Handler: app.lambda_handler
+      Role: !Ref LambdaRoleArn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: 30
+      # The zip is uploaded by scripts/deploy.sh (or by hand in the console).
+      # Use a NEW key for every code change - CloudFormation only updates the function when the key changes.
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          ENV: !Ref Environment
+          RAW_PREFIX: !Ref RawPrefix
+          ALLOWED_DATASETS: !Ref AllowedDatasets
+          ALLOWED_EXTENSIONS: !Ref AllowedExtensions
+          MAX_FILE_SIZE_MB: !Ref MaxFileSizeMB
+
+Outputs:
+  ValidateFunctionArn:
+    Value: !GetAtt ValidateFileFunction.Arn
+  ValidateFunctionName:
+    Value: !Ref ValidateFileFunction
